@@ -1,14 +1,26 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
 
-const BUILD_IN_COMMANDS: [&str; 2] = ["exit", "echo"];
+const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
     CommandBuiltIn { builtin_command: BuiltInCommand },
     CommandNotFound { unknown_command_name: String },
 }
 enum BuiltInCommand {
-    Exit { exit_code: i32 },
-    Echo { content: String },
+    Exit {
+        exit_code: i32,
+    },
+    Echo {
+        content: String,
+    },
+    Type {
+        command_name: String,
+        command_type: CommandType,
+    },
+}
+enum CommandType {
+    BuiltIn,
+    Other,
 }
 
 trait ParseInput {
@@ -40,6 +52,26 @@ impl ParseInput for Command {
                                 content: String::from(input.trim_start_matches("echo ")),
                             },
                         }
+                    }
+                    "type" => {
+                        if args.len() == 1 {
+                            break;
+                        };
+                        if BUILD_IN_COMMANDS.contains(&args[1]) {
+                            return Command::CommandBuiltIn {
+                                builtin_command: BuiltInCommand::Type {
+                                    command_name: String::from(args[1]),
+                                    command_type: CommandType::BuiltIn,
+                                },
+                            };
+                        }
+
+                        return Command::CommandBuiltIn {
+                            builtin_command: BuiltInCommand::Type {
+                                command_name: String::from(args[1]),
+                                command_type: CommandType::Other,
+                            },
+                        };
                     }
                     _ => {}
                 }
@@ -78,6 +110,17 @@ fn main() {
                 BuiltInCommand::Echo { content } => {
                     println!("{}", content);
                 }
+                BuiltInCommand::Type {
+                    command_name,
+                    command_type,
+                } => match command_type {
+                    CommandType::BuiltIn => {
+                        println!("{} is a shell builtin", command_name)
+                    }
+                    CommandType::Other => {
+                        println!("{}: not found", command_name)
+                    }
+                },
             },
         }
     }
