@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             paths = std::env::split_paths(&val)
                 .map(|path| path.to_str().unwrap().to_string())
                 .collect();
+            paths.reverse();
         }
         None => {}
     }
