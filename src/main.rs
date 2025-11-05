@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{error::Error, ops::Deref};
+use std::{error::Error, fs::metadata, ops::Deref, path::PathBuf};
 
 const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
@@ -8,6 +8,7 @@ enum Command {
     CommandNotFound { unknown_command_name: String },
 }
 enum BuiltInCommand {
+    #[allow(dead_code)]
     Exit {
         exit_code: i32,
     },
@@ -74,7 +75,7 @@ impl ParseInput for Command {
                         }
 
                         for path in paths {
-                            let executable_file_type = read_bin_from_path(path, &args[1])?;
+                            let executable_file_type = find_bin_from_path(path, &args[1])?;
                             match executable_file_type {
                                 ExecutableFileType::Permission(absolute_path) => {
                                     let command = Command::CommandBuiltIn {
@@ -122,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             paths = std::env::split_paths(&val)
                 .map(|path| path.to_str().unwrap().to_string())
                 .collect();
-            paths.reverse();
+            // paths.reverse();
         }
         None => {}
     }
@@ -166,25 +167,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<dyn Error>> {
-    let entries = std::fs::read_dir(path)?;
-
-    for entry in entries {
-        let dir_entry = entry?;
-
-        let meta = dir_entry.metadata()?;
-        if meta.is_file() {
-            if dir_entry.file_name() == bin {
-                if !meta.permissions().readonly() {
-                    return Ok(ExecutableFileType::Permission(String::from(
-                        dir_entry.path().to_string_lossy().to_string(),
-                    )));
-                } else {
-                    return Ok(ExecutableFileType::NoPermission);
-                }
-            }
-        }
+fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<dyn Error>> {
+    let bin_path = PathBuf::from(path).join(bin);
+    if !bin_path.exists() {
+        return Ok(ExecutableFileType::NotFound);
     }
 
-    Ok(ExecutableFileType::NotFound)
+    let meta = metadata(&bin_path)?;
+    if !meta.is_file() {
+        return Ok(ExecutableFileType::NotFound);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // NOTE: permission mask bit 0o111
+        if (meta.permissions().mode() & 0o111) != 0 {
+            return Ok(ExecutableFileType::Permission(
+                (&bin_path).to_string_lossy().to_string(),
+            ));
+        } else {
+            return Ok(ExecutableFileType::NoPermission);
+        }
+    }
 }
