@@ -41,8 +41,25 @@ enum ExecutableFileType {
     NotFound,
 }
 
+struct Input<'a> {
+    raw: &'a str,
+    trimmed: &'a str,
+    args: Vec<&'a str>,
+}
+
 trait ParseInput {
-    fn from_input(input: &str, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>>;
+    fn from_input(input: &Input, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>>;
+}
+
+impl<'a> From<&'a str> for Input<'a> {
+    fn from(value: &'a str) -> Self {
+        let trimed_input = value.trim();
+        Input {
+            raw: value,
+            trimmed: trimed_input,
+            args: trimed_input.split_whitespace().collect(),
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -62,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        let command = Command::from_input(&input, &paths)?;
+        let command = Command::from_input(&(Input::from(&input[..])), &paths)?;
         let is_continue = command.handle()?;
         if !is_continue {
             break;
@@ -75,105 +92,139 @@ impl ParseInput for Command {
     // TODO: 这个函数还是太长了,
     // 由于构造command需要用到很多传入的参数所以...目前能想到的解决办法只有重构from_input的参数,
     // 大概是写一个结构体, 可能包含原始input,以及分割后的args还有环境变量一类的
-    fn from_input(input: &str, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>> {
-        let input = input.trim();
-        if input.is_empty() {
+    fn from_input(input: &Input, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>> {
+        if input.trimmed.is_empty() {
             return Ok(Box::new(Command::Empty));
         }
-        let args = input.split_whitespace().collect::<Vec<&str>>();
         // NOTE: builtin command
         for builtin in BUILD_IN_COMMANDS {
-            if args[0] == builtin {
-                match builtin {
-                    "exit" => {
-                        let command = Command::CommandBuiltIn {
-                            builtin_command: BuiltInCommand::Exit {
-                                exit_code: if args.len() > 1 { args[1].parse()? } else { 0 },
-                            },
-                        };
-                        return Ok(Box::from(command));
-                    }
-                    "echo" => {
-                        let command = Command::CommandBuiltIn {
-                            builtin_command: BuiltInCommand::Echo {
-                                content: String::from(input.trim_start_matches("echo ")),
-                            },
-                        };
-                        return Ok(Box::from(command));
-                    }
-                    "type" => {
-                        if args.len() == 1 {
-                            break;
-                        };
-                        if BUILD_IN_COMMANDS.contains(&args[1]) {
-                            let command = Command::CommandBuiltIn {
-                                builtin_command: BuiltInCommand::Type {
-                                    command_name: String::from(args[1]),
-                                    command_type: CommandType::BuiltIn,
-                                },
-                            };
-                            return Ok(Box::from(command));
-                        }
-
-                        for path in paths {
-                            let executable_file_type = find_bin_from_path(path, &args[1])?;
-                            match executable_file_type {
-                                ExecutableFileType::Permission(absolute_path) => {
-                                    let command = Command::CommandBuiltIn {
-                                        builtin_command: BuiltInCommand::Type {
-                                            command_name: String::from(args[1]),
-                                            command_type: CommandType::Other(absolute_path),
-                                        },
-                                    };
-                                    return Ok(Box::from(command));
-                                }
-                                ExecutableFileType::NoPermission => {}
-                                ExecutableFileType::NotFound => {}
-                            }
-                        }
-
-                        let command = Command::CommandBuiltIn {
-                            builtin_command: BuiltInCommand::Type {
-                                command_name: String::from(args[1]),
-                                command_type: CommandType::Invalid,
-                            },
-                        };
-                        return Ok(Box::from(command));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // NOTE: external command
-        for path in paths {
-            let executable_file_type = find_bin_from_path(path, &args[0])?;
-            match executable_file_type {
-                ExecutableFileType::Permission(_) => {
-                    let command = Command::CommandExternal {
-                        command_name: args[0].to_string(),
-                        args: {
-                            if args.len() > 1 {
-                                Some(args[1..args.len()].iter().map(|&s| s.to_string()).collect())
-                            } else {
-                                None
-                            }
-                        },
-                    };
+            if input.args[0] == builtin {
+                let command_builtin = construct_builtin(input, paths, builtin)?;
+                if let Some(command) = command_builtin {
                     return Ok(Box::from(command));
                 }
-                ExecutableFileType::NoPermission => {}
-                ExecutableFileType::NotFound => {}
             }
         }
-        match input {
+
+        match input.trimmed {
             _ => {
+                // NOTE: external command
+                let command_external = construct_external_command(input, paths)?;
+                if let Some(command) = command_external {
+                    return Ok(Box::from(command));
+                }
+
                 let command = Command::CommandNotFound {
-                    unknown_command_name: String::from(input),
+                    unknown_command_name: String::from(input.trimmed),
                 };
                 Ok(Box::from(command))
             }
         }
+    }
+}
+
+fn construct_external_command(
+    input: &Input<'_>,
+    paths: &Vec<String>,
+) -> Result<Option<Command>, Box<dyn Error>> {
+    for path in paths {
+        let executable_file_type = find_bin_from_path(path, &input.args[0])?;
+        match executable_file_type {
+            ExecutableFileType::Permission(_) => {
+                let command = Command::CommandExternal {
+                    command_name: input.args[0].to_string(),
+                    args: {
+                        if input.args.len() > 1 {
+                            Some(
+                                input.args[1..input.args.len()]
+                                    .iter()
+                                    .map(|&s| s.to_string())
+                                    .collect(),
+                            )
+                        } else {
+                            None
+                        }
+                    },
+                };
+                return Ok(Some(command));
+            }
+            ExecutableFileType::NoPermission => {}
+            ExecutableFileType::NotFound => {}
+        }
+    }
+    Ok(None)
+}
+
+fn construct_builtin(
+    input: &Input<'_>,
+    paths: &Vec<String>,
+    builtin: &str,
+) -> Result<Option<Command>, Box<dyn Error>> {
+    match builtin {
+        "exit" => {
+            let command = Command::CommandBuiltIn {
+                builtin_command: BuiltInCommand::Exit {
+                    exit_code: if input.args.len() > 1 {
+                        input.args[1].parse()?
+                    } else {
+                        0
+                    },
+                },
+            };
+            return Ok(Some(command));
+        }
+        "echo" => {
+            let command = Command::CommandBuiltIn {
+                builtin_command: BuiltInCommand::Echo {
+                    content: String::from(input.trimmed.trim_start_matches("echo ")),
+                },
+            };
+            return Ok(Some(command));
+        }
+        "type" => {
+            if input.args.len() == 1 {
+                // NOTE: 事实上这里应该返回的是提示用户type后边必须跟一条指令,
+                // 不过我的enum目前没有这个内容,感觉加上去有点冗余,就先返回None
+                return Ok(None);
+                // break;
+            };
+            if BUILD_IN_COMMANDS.contains(&input.args[1]) {
+                let command = Command::CommandBuiltIn {
+                    builtin_command: BuiltInCommand::Type {
+                        command_name: String::from(input.args[1]),
+                        command_type: CommandType::BuiltIn,
+                    },
+                };
+                return Ok(Some(command));
+            }
+
+            for path in paths {
+                let executable_file_type = find_bin_from_path(path, &input.args[1])?;
+                match executable_file_type {
+                    ExecutableFileType::Permission(absolute_path) => {
+                        let command = Command::CommandBuiltIn {
+                            builtin_command: BuiltInCommand::Type {
+                                command_name: String::from(input.args[1]),
+                                command_type: CommandType::Other(absolute_path),
+                            },
+                        };
+                        return Ok(Some(command));
+                    }
+                    ExecutableFileType::NoPermission => {}
+                    ExecutableFileType::NotFound => {}
+                }
+            }
+
+            let command = Command::CommandBuiltIn {
+                builtin_command: BuiltInCommand::Type {
+                    command_name: String::from(input.args[1]),
+                    command_type: CommandType::Invalid,
+                },
+            };
+            return Ok(Some(command));
+        }
+        // NOTE: 事实上这个函数绝对不会到这里
+        _ => return Ok(None),
     }
 }
 fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<dyn Error>> {
@@ -218,9 +269,8 @@ impl Command {
                 if let Some(args) = args {
                     executer.args(args);
                 }
-                let output = executer.output()?;
-                io::stdout().write_all(&output.stdout)?;
-                io::stderr().write_all(&output.stderr)?;
+                let mut process = executer.spawn()?;
+                let _status = process.wait()?;
             }
             Command::Empty => {}
         }
