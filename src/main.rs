@@ -47,8 +47,22 @@ struct Input<'a> {
     args: Vec<&'a str>,
 }
 
+struct ParsedContext<'a> {
+    input: Input<'a>,
+    paths: &'a [String],
+}
+
+impl<'a> From<(&'a str, &'a [String])> for ParsedContext<'a> {
+    fn from((input_str, paths): (&'a str, &'a [String])) -> Self {
+        ParsedContext {
+            input: Input::from(input_str),
+            paths,
+        }
+    }
+}
+
 trait ParseInput {
-    fn from_input(input: &Input, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>>;
+    fn from_input(context: &ParsedContext) -> Result<Box<Self>, Box<dyn Error>>;
 }
 
 impl<'a> From<&'a str> for Input<'a> {
@@ -79,7 +93,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        let command = Command::from_input(&(Input::from(&input[..])), &paths)?;
+        let context = ParsedContext::from((&input[..], &paths[..]));
+        let command = Command::from_input(&context)?;
         let is_continue = command.handle()?;
         if !is_continue {
             break;
@@ -92,7 +107,9 @@ impl ParseInput for Command {
     // TODO: 这个函数还是太长了,
     // 由于构造command需要用到很多传入的参数所以...目前能想到的解决办法只有重构from_input的参数,
     // 大概是写一个结构体, 可能包含原始input,以及分割后的args还有环境变量一类的
-    fn from_input(input: &Input, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>> {
+    fn from_input(context: &ParsedContext) -> Result<Box<Self>, Box<dyn Error>> {
+        let input = &context.input;
+        let paths = context.paths;
         if input.trimmed.is_empty() {
             return Ok(Box::new(Command::Empty));
         }
@@ -125,7 +142,7 @@ impl ParseInput for Command {
 
 fn construct_external_command(
     input: &Input<'_>,
-    paths: &Vec<String>,
+    paths: &[String],
 ) -> Result<Option<Command>, Box<dyn Error>> {
     for path in paths {
         let executable_file_type = find_bin_from_path(path, &input.args[0])?;
@@ -157,7 +174,7 @@ fn construct_external_command(
 
 fn construct_builtin(
     input: &Input<'_>,
-    paths: &Vec<String>,
+    paths: &[String],
     builtin: &str,
 ) -> Result<Option<Command>, Box<dyn Error>> {
     match builtin {
