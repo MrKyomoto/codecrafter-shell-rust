@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{error::Error, fs::metadata, ops::Deref, path::PathBuf};
+use std::{error::Error, fmt::Display, fs::metadata, path::PathBuf};
 
 const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
@@ -36,7 +36,36 @@ trait ParseInput {
     fn from_input(input: &str, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>>;
 }
 
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut paths: Vec<String> = Vec::new();
+    match std::env::var_os("PATH") {
+        Some(val) => {
+            paths = std::env::split_paths(&val)
+                .map(|path| path.to_str().unwrap().to_string())
+                .collect();
+            // paths.reverse();
+        }
+        None => {}
+    }
+    loop {
+        print!("$ ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let command = Command::from_input(&input, &paths)?;
+        let is_continue = command.handle()?;
+        if !is_continue {
+            break;
+        }
+    }
+    Ok(())
+}
+
 impl ParseInput for Command {
+    // TODO: 这个函数还是太长了,
+    // 由于构造command需要用到很多传入的参数所以...目前能想到的解决办法只有重构from_input的参数,
+    // 大概是写一个结构体, 可能包含原始input,以及分割后的args还有环境变量一类的
     fn from_input(input: &str, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>> {
         let input = input.trim();
         let args = input.split_whitespace().collect::<Vec<&str>>();
@@ -115,58 +144,6 @@ impl ParseInput for Command {
         }
     }
 }
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut paths: Vec<String> = Vec::new();
-    match std::env::var_os("PATH") {
-        Some(val) => {
-            paths = std::env::split_paths(&val)
-                .map(|path| path.to_str().unwrap().to_string())
-                .collect();
-            // paths.reverse();
-        }
-        None => {}
-    }
-    loop {
-        print!("$ ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let command = Command::from_input(&input, &paths)?;
-        match command.deref() {
-            Command::CommandNotFound {
-                unknown_command_name,
-            } => {
-                println!("{}: command not found", unknown_command_name);
-            }
-            Command::CommandBuiltIn { builtin_command } => match builtin_command {
-                BuiltInCommand::Exit { exit_code: _ } => {
-                    break;
-                }
-                BuiltInCommand::Echo { content } => {
-                    println!("{}", content);
-                }
-                BuiltInCommand::Type {
-                    command_name,
-                    command_type,
-                } => match command_type {
-                    CommandType::BuiltIn => {
-                        println!("{} is a shell builtin", command_name)
-                    }
-                    CommandType::Other(path) => {
-                        println!("{} is {}", command_name, path)
-                    }
-                    CommandType::Invalid => {
-                        println!("{}: not found", command_name)
-                    }
-                },
-            },
-        }
-    }
-    Ok(())
-}
-
 fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<dyn Error>> {
     let bin_path = PathBuf::from(path).join(bin);
     if !bin_path.exists() {
@@ -179,6 +156,7 @@ fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<d
     }
 
     #[cfg(unix)]
+impl Command {}
     {
         use std::os::unix::fs::PermissionsExt;
 
@@ -189,6 +167,57 @@ fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<d
             ));
         } else {
             return Ok(ExecutableFileType::NoPermission);
+        }
+    }
+}
+
+impl Command {
+    fn handle(&self) -> Result<bool, Box<dyn Error>> {
+        match self {
+            Command::CommandNotFound {
+                unknown_command_name,
+            } => {
+                println!("{}: command not found", unknown_command_name);
+            }
+            Command::CommandBuiltIn { builtin_command } => {
+                return builtin_command.handle();
+            }
+        }
+        Ok(true)
+    }
+}
+
+impl BuiltInCommand {
+    fn handle(&self) -> Result<bool, Box<dyn Error>> {
+        match self {
+            BuiltInCommand::Exit { exit_code: _ } => {
+                return Ok(false);
+            }
+            BuiltInCommand::Echo { content } => {
+                println!("{}", content);
+            }
+            BuiltInCommand::Type {
+                command_name,
+                command_type,
+            } => {
+                println!("{}{}", command_name, command_type.to_string());
+            }
+        }
+        Ok(true)
+    }
+}
+impl Display for CommandType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandType::BuiltIn => {
+                write!(f, " is a shell builtin")
+            }
+            CommandType::Other(path) => {
+                write!(f, " is {}", path)
+            }
+            CommandType::Invalid => {
+                write!(f, ": not found")
+            }
         }
     }
 }
