@@ -2,7 +2,6 @@
 use std::io::{self, Write};
 use std::{error::Error, fmt::Display, fs::metadata, path::PathBuf};
 
-const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
     CommandBuiltIn {
         builtin_command: BuiltInCommand,
@@ -28,6 +27,7 @@ enum BuiltInCommand {
         command_name: String,
         command_type: CommandType,
     },
+    Pwd,
 }
 enum CommandType {
     BuiltIn,
@@ -42,6 +42,7 @@ enum ExecutableFileType {
 }
 
 struct Input<'a> {
+    #[allow(dead_code)]
     raw: &'a str,
     trimmed: &'a str,
     args: Vec<&'a str>,
@@ -50,15 +51,6 @@ struct Input<'a> {
 struct ParsedContext<'a> {
     input: Input<'a>,
     paths: &'a [String],
-}
-
-impl<'a> From<(&'a str, &'a [String])> for ParsedContext<'a> {
-    fn from((input_str, paths): (&'a str, &'a [String])) -> Self {
-        ParsedContext {
-            input: Input::from(input_str),
-            paths,
-        }
-    }
 }
 
 trait ParseInput {
@@ -75,6 +67,17 @@ impl<'a> From<&'a str> for Input<'a> {
         }
     }
 }
+
+impl<'a> From<(&'a str, &'a [String])> for ParsedContext<'a> {
+    fn from((input_str, paths): (&'a str, &'a [String])) -> Self {
+        ParsedContext {
+            input: Input::from(input_str),
+            paths,
+        }
+    }
+}
+
+const BUILD_IN_COMMANDS: [&str; 4] = ["exit", "echo", "type", "pwd"];
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut paths: Vec<String> = Vec::new();
@@ -93,8 +96,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
+
         let context = ParsedContext::from((&input[..], &paths[..]));
+
         let command = Command::from_input(&context)?;
+
         let is_continue = command.handle()?;
         if !is_continue {
             break;
@@ -240,6 +246,12 @@ fn construct_builtin(
             };
             return Ok(Some(command));
         }
+        "pwd" => {
+            let command = Command::CommandBuiltIn {
+                builtin_command: BuiltInCommand::Pwd,
+            };
+            return Ok(Some(command));
+        }
         // NOTE: 事实上这个函数绝对不会到这里
         _ => return Ok(None),
     }
@@ -309,6 +321,9 @@ impl BuiltInCommand {
                 command_type,
             } => {
                 println!("{}{}", command_name, command_type.to_string());
+            }
+            BuiltInCommand::Pwd => {
+                println!("{}", std::env::current_dir()?.display());
             }
         }
         Ok(true)
