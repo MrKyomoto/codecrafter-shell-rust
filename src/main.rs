@@ -1,11 +1,20 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{error::Error, fmt::Display, fs::metadata, path::PathBuf};
+use std::{env::Args, error::Error, fmt::Display, fs::metadata, path::PathBuf};
 
 const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
-    CommandBuiltIn { builtin_command: BuiltInCommand },
-    CommandNotFound { unknown_command_name: String },
+    CommandBuiltIn {
+        builtin_command: BuiltInCommand,
+    },
+    CommandNotFound {
+        unknown_command_name: String,
+    },
+    CommandExternal {
+        absolute_path: String,
+        args: Option<Vec<String>>,
+    },
+    Empty,
 }
 enum BuiltInCommand {
     #[allow(dead_code)]
@@ -68,6 +77,9 @@ impl ParseInput for Command {
     // 大概是写一个结构体, 可能包含原始input,以及分割后的args还有环境变量一类的
     fn from_input(input: &str, paths: &Vec<String>) -> Result<Box<Self>, Box<dyn Error>> {
         let input = input.trim();
+        if input.is_empty() {
+            return Ok(Box::new(Command::Empty));
+        }
         let args = input.split_whitespace().collect::<Vec<&str>>();
         // NOTE: builtin command
         for builtin in BUILD_IN_COMMANDS {
@@ -133,7 +145,27 @@ impl ParseInput for Command {
             }
         }
 
-        // NOTE: other command
+        // NOTE: external command
+        for path in paths {
+            let executable_file_type = find_bin_from_path(path, &args[0])?;
+            match executable_file_type {
+                ExecutableFileType::Permission(absolute_path) => {
+                    let command = Command::CommandExternal {
+                        absolute_path: absolute_path,
+                        args: {
+                            if args.len() > 1 {
+                                Some(args[1..args.len()].iter().map(|&s| s.to_string()).collect())
+                            } else {
+                                None
+                            }
+                        },
+                    };
+                    return Ok(Box::from(command));
+                }
+                ExecutableFileType::NoPermission => {}
+                ExecutableFileType::NotFound => {}
+            }
+        }
         match input {
             _ => {
                 let command = Command::CommandNotFound {
@@ -156,7 +188,6 @@ fn find_bin_from_path(path: &str, bin: &str) -> Result<ExecutableFileType, Box<d
     }
 
     #[cfg(unix)]
-impl Command {}
     {
         use std::os::unix::fs::PermissionsExt;
 
@@ -182,6 +213,19 @@ impl Command {
             Command::CommandBuiltIn { builtin_command } => {
                 return builtin_command.handle();
             }
+            Command::CommandExternal {
+                absolute_path,
+                args,
+            } => {
+                let mut executer = std::process::Command::new(absolute_path);
+                if let Some(args) = args {
+                    executer.args(args);
+                }
+                let output = executer.output()?;
+                io::stdout().write_all(&output.stdout)?;
+                io::stderr().write_all(&output.stderr)?;
+            }
+            Command::Empty => {}
         }
         Ok(true)
     }
