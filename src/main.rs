@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use std::io::{self, Write};
-use std::{env::Args, error::Error, fmt::Display, fs::metadata, path::PathBuf};
+use std::{error::Error, fmt::Display, fs::metadata, path::PathBuf};
 
 const BUILD_IN_COMMANDS: [&str; 3] = ["exit", "echo", "type"];
 enum Command {
@@ -11,7 +11,7 @@ enum Command {
         unknown_command_name: String,
     },
     CommandExternal {
-        absolute_path: String,
+        command_name: String,
         args: Option<Vec<String>>,
     },
     Empty,
@@ -149,9 +149,9 @@ impl ParseInput for Command {
         for path in paths {
             let executable_file_type = find_bin_from_path(path, &args[0])?;
             match executable_file_type {
-                ExecutableFileType::Permission(absolute_path) => {
+                ExecutableFileType::Permission(_) => {
                     let command = Command::CommandExternal {
-                        absolute_path: absolute_path,
+                        command_name: args[0].to_string(),
                         args: {
                             if args.len() > 1 {
                                 Some(args[1..args.len()].iter().map(|&s| s.to_string()).collect())
@@ -213,11 +213,8 @@ impl Command {
             Command::CommandBuiltIn { builtin_command } => {
                 return builtin_command.handle();
             }
-            Command::CommandExternal {
-                absolute_path,
-                args,
-            } => {
-                let mut executer = std::process::Command::new(absolute_path);
+            Command::CommandExternal { command_name, args } => {
+                let mut executer = std::process::Command::new(command_name);
                 if let Some(args) = args {
                     executer.args(args);
                 }
